@@ -69,6 +69,8 @@ const (
 	accessKeyID           = "ak"
 	secretAccessKey       = "sk"
 	credentialsID         = "credentialsId"
+	v2BaseStatsPath       = "/v2/stats"
+	v2BaseMetadataPath    = "/v2/metadata"
 )
 
 var (
@@ -499,4 +501,164 @@ func TestTaskStats(t *testing.T) {
 	containerStats, ok := statsFromResult[containerID]
 	assert.True(t, ok)
 	assert.Equal(t, dockerStats.NumProcs, containerStats.NumProcs)
+}
+
+func TestV2ServerErrorCode404(t *testing.T) {
+	testPaths := []string {
+		"/",
+		"/v2/meta",
+		"/v2/statss",
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	state := mock_dockerstate.NewMockTaskEngineState(ctrl)
+	auditLog := mock_audit.NewMockAuditLogger(ctrl)
+	statsEngine := mock_stats.NewMockEngine(ctrl)
+
+	server := v2SetupServer(credentials.NewManager(), auditLog, state, clusterName, statsEngine,
+		config.DefaultTaskMetadataSteadyStateRate, config.DefaultTaskMetadataBurstRate)
+
+	for _, testPath := range testPaths {
+		t.Run(fmt.Sprintf("Test path: %s", testPath), func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", testPath, nil)
+			server.Handler.ServeHTTP(recorder, req)
+			assert.Equal(t, http.StatusNotFound, recorder.Code)
+		})
+	}
+}
+
+func TestV2ServerErrorCode400(t *testing.T) {
+	testPaths := []string {
+		"/v2/metadata",
+		"/v2/metadata/",
+		"/v2/metadata/wrong-container-id",
+		"/v2/metadata/container-id/other-path",
+		"/v2/stats",
+		"/v2/stats/",
+		"/v2/stats/wrong-container-id",
+		"/v2/stats/container-id/other-path",
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	state := mock_dockerstate.NewMockTaskEngineState(ctrl)
+	auditLog := mock_audit.NewMockAuditLogger(ctrl)
+	statsEngine := mock_stats.NewMockEngine(ctrl)
+
+	server := v2SetupServer(credentials.NewManager(), auditLog, state, clusterName, statsEngine,
+		config.DefaultTaskMetadataSteadyStateRate, config.DefaultTaskMetadataBurstRate)
+
+	for _, testPath := range testPaths {
+		t.Run(fmt.Sprintf("Test path: %s", testPath), func(t *testing.T) {
+			// Make every possible call to state fail
+			state.EXPECT().GetTaskByIPAddress(gomock.Any()).Return("", false).AnyTimes()
+
+			recorder := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", testPath, nil)
+			req.RemoteAddr = remoteIP + ":" + remotePort
+			server.Handler.ServeHTTP(recorder, req)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code)
+		})
+	}
+}
+
+func TestV2TaskMetadata(t *testing.T) {
+	testCases := []struct {
+		path string
+
+	}{
+		{
+			v2BaseMetadataPath,
+		},
+		{
+			v2BaseMetadataPath + "/",
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("Testing path: %s", tc.path), func(t *testing.T) {
+			state := mock_dockerstate.NewMockTaskEngineState(ctrl)
+			auditLog := mock_audit.NewMockAuditLogger(ctrl)
+			statsEngine := mock_stats.NewMockEngine(ctrl)
+
+			gomock.InOrder(
+				state.EXPECT().GetTaskByIPAddress(remoteIP).Return(taskARN, true),
+				state.EXPECT().TaskByArn(taskARN).Return(task, true),
+				state.EXPECT().ContainerMapByArn(taskARN).Return(containerNameToDockerContainer, true),
+			)
+			server := v2SetupServer(credentials.NewManager(), auditLog, state, clusterName, statsEngine,
+				config.DefaultTaskMetadataSteadyStateRate, config.DefaultTaskMetadataBurstRate)
+			recorder := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", tc.path, nil)
+			req.RemoteAddr = remoteIP + ":" + remotePort
+			server.Handler.ServeHTTP(recorder, req)
+			res, err := ioutil.ReadAll(recorder.Body)
+			assert.NoError(t, err)
+			assert.Equal(t, http.StatusOK, recorder.Code)
+			var taskResponse v2.TaskResponse
+			err = json.Unmarshal(res, &taskResponse)
+			assert.NoError(t, err)
+			assert.Equal(t, expectedTaskResponse, taskResponse)
+
+		})
+	}
+}
+
+func TestV2TaskStats(t *testing.T) {
+	testCases := []struct {
+		path string
+
+	}{
+		{
+			v2BaseStatsPath,
+		},
+		{
+			v2BaseStatsPath + "/",
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("Testing path: %s", tc.path), func(t *testing.T) {
+			state := mock_dockerstate.NewMockTaskEngineState(ctrl)
+			auditLog := mock_audit.NewMockAuditLogger(ctrl)
+			statsEngine := mock_stats.NewMockEngine(ctrl)
+
+			dockerStats := &docker.Stats{NumProcs: 2}
+			containerMap := map[string]*apicontainer.DockerContainer{
+				containerName: &apicontainer.DockerContainer{
+					DockerID: containerID,
+				},
+			}
+			gomock.InOrder(
+				state.EXPECT().GetTaskByIPAddress(remoteIP).Return(taskARN, true),
+				state.EXPECT().ContainerMapByArn(taskARN).Return(containerMap, true),
+				statsEngine.EXPECT().ContainerDockerStats(taskARN, containerID).Return(dockerStats, nil),
+			)
+			server := v2SetupServer(credentials.NewManager(), auditLog, state, clusterName, statsEngine,
+				config.DefaultTaskMetadataSteadyStateRate, config.DefaultTaskMetadataBurstRate)
+			recorder := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", tc.path, nil)
+			req.RemoteAddr = remoteIP + ":" + remotePort
+			server.Handler.ServeHTTP(recorder, req)
+			res, err := ioutil.ReadAll(recorder.Body)
+			assert.NoError(t, err)
+			assert.Equal(t, http.StatusOK, recorder.Code)
+			var statsFromResult map[string]*docker.Stats
+			err = json.Unmarshal(res, &statsFromResult)
+			assert.NoError(t, err)
+			containerStats, ok := statsFromResult[containerID]
+			assert.True(t, ok)
+			assert.Equal(t, dockerStats.NumProcs, containerStats.NumProcs)
+		})
+	}
 }
