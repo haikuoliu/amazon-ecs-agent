@@ -125,6 +125,16 @@ const (
 	ImagePullPreferCachedBehavior
 )
 
+const (
+	// When ContainerInstancePropagateTagsEC2InstanceType is specified, no DescribeTags
+	// API call will be made.
+	ContainerInstancePropagateTagsNoneType ContainerInstancePropagateTagsType = iota
+
+	// When ContainerInstancePropagateTagsEC2InstanceType is specified, agent will
+	// make DescribeTags API call to get tags remotely.
+	ContainerInstancePropagateTagsEC2InstanceType
+)
+
 var (
 	// DefaultPauseContainerImageName is the name of the pause container image. The linker's
 	// load flags are used to populate this value from the Makefile
@@ -406,6 +416,9 @@ func environmentConfig() (Config, error) {
 	var errs []error
 	instanceAttributes, errs = parseInstanceAttributes(errs)
 
+	var containerInstanceTags map[string]string
+	containerInstanceTags, errs = parseContainerInstanceTags(errs)
+
 	var additionalLocalRoutes []cnitypes.IPNet
 	additionalLocalRoutes, errs = parseAdditionalLocalRoutes(errs)
 
@@ -457,6 +470,8 @@ func environmentConfig() (Config, error) {
 		TaskMetadataSteadyStateRate:      steadyStateRate,
 		TaskMetadataBurstRate:            burstRate,
 		SharedVolumeMatchFullConfig:      utils.ParseBool(os.Getenv("ECS_SHARED_VOLUME_MATCH_FULL_CONFIG"), false),
+		ContainerInstanceTags:            containerInstanceTags,
+		ContainerInstancePropagateTags:   parseContainerInstancePropagateTags(),
 	}, err
 }
 

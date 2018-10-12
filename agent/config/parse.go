@@ -206,6 +206,39 @@ func parseTaskMetadataThrottles() (int, int) {
 	return steadyStateRate, burstRate
 }
 
+func parseContainerInstanceTags(errs []error) (map[string]string, []error) {
+	var containerInstanceTags map[string]string
+	containerInstanceTagsConfigString := os.Getenv("ECS_CONTAINER_INSTANCE_TAGS")
+
+	// If duplicate keys exist, the value of the key will be the value of latter key.
+	err := json.Unmarshal([]byte(containerInstanceTagsConfigString), &containerInstanceTags)
+	if containerInstanceTagsConfigString != "" {
+		if err != nil {
+			wrappedErr := fmt.Errorf("Invalid format for ECS_CONTAINER_INSTANCE_TAGS. Expected a json hash: %v", err)
+			seelog.Error(wrappedErr)
+			errs = append(errs, wrappedErr)
+		}
+	}
+
+	for tagKey, tagValue := range containerInstanceTags {
+		seelog.Debugf("Setting instance tag %v: %v", tagKey, tagValue)
+	}
+
+	return containerInstanceTags, errs
+}
+
+func parseContainerInstancePropagateTags() ContainerInstancePropagateTagsType {
+	containerInstancePropagateTagsString := os.Getenv("ECS_CONTAINER_INSTANCE_PROPAGATE_TAGS")
+	switch containerInstancePropagateTagsString {
+	case "ec2_instance":
+		return ContainerInstancePropagateTagsEC2InstanceType
+	default:
+		// Use the default "none" type when ECS_CONTAINER_INSTANCE_PROPAGATE_TAGS is
+		// "none" or not valid.
+		return ContainerInstancePropagateTagsNoneType
+	}
+}
+
 func parseEnvVariableUint16(envVar string) uint16 {
 	envVal := os.Getenv(envVar)
 	var var16 uint16

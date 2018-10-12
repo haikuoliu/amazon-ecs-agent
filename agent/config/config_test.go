@@ -87,6 +87,7 @@ func TestEnvironmentConfig(t *testing.T) {
 	defer setTestEnv("ECS_NUM_IMAGES_DELETE_PER_CYCLE", "2")()
 	defer setTestEnv("ECS_IMAGE_PULL_BEHAVIOR", "always")()
 	defer setTestEnv("ECS_INSTANCE_ATTRIBUTES", "{\"my_attribute\": \"testing\"}")()
+	defer setTestEnv("ECS_CONTAINER_INSTANCE_TAGS", "{\"my_tag\": \"testing\"}")()
 	defer setTestEnv("ECS_ENABLE_TASK_ENI", "true")()
 	defer setTestEnv("ECS_TASK_METADATA_RPS_LIMIT", "1000,1100")()
 	defer setTestEnv("ECS_SHARED_VOLUME_MATCH_FULL_CONFIG", "true")()
@@ -120,6 +121,7 @@ func TestEnvironmentConfig(t *testing.T) {
 	assert.Equal(t, 2, conf.NumImagesToDeletePerCycle)
 	assert.Equal(t, ImagePullAlwaysBehavior, conf.ImagePullBehavior)
 	assert.Equal(t, "testing", conf.InstanceAttributes["my_attribute"])
+	assert.Equal(t, "testing", conf.ContainerInstanceTags["my_tag"])
 	assert.Equal(t, (90 * time.Second), conf.TaskCleanupWaitDuration)
 	serializedAdditionalLocalRoutesJSON, err := json.Marshal(conf.AWSVPCAdditionalLocalRoutes)
 	assert.NoError(t, err, "should marshal additional local routes")
@@ -172,6 +174,13 @@ func TestBadLoggingDriverSerialization(t *testing.T) {
 func TestBadAttributesSerialization(t *testing.T) {
 	defer setTestRegion()()
 	defer setTestEnv("ECS_INSTANCE_ATTRIBUTES", "This is not valid JSON")()
+	_, err := environmentConfig()
+	assert.Error(t, err)
+}
+
+func TestBadTagsSerialization(t *testing.T) {
+	defer setTestRegion()()
+	defer setTestEnv("ECS_CONTAINER_INSTANCE_TAGS", "This is not valid JSON")()
 	_, err := environmentConfig()
 	assert.Error(t, err)
 }
@@ -588,6 +597,49 @@ func TestUserDataConfig(t *testing.T) {
 			cfg := userDataConfig(mockEc2Metadata)
 			assert.Equal(t, tc.expectedConfigAPIEndpoint, cfg.APIEndpoint)
 			assert.Equal(t, tc.expectedConfigCluster, cfg.Cluster)
+		})
+	}
+}
+
+func TestContainerInstancePropagateTags(t *testing.T) {
+	testcases := []struct {
+		name                                   string
+		envVarVal                              string
+		expectedContainerInstancePropagateTags ContainerInstancePropagateTagsType
+	}{
+		{
+			name:      "none container instance propagate tags",
+			envVarVal: "none",
+			expectedContainerInstancePropagateTags: ContainerInstancePropagateTagsNoneType,
+		},
+		{
+			name:      "ec2_instance container instance propagate tags",
+			envVarVal: "ec2_instance",
+			expectedContainerInstancePropagateTags: ContainerInstancePropagateTagsEC2InstanceType,
+		},
+		{
+			name:      "invalid container instance propagate tags",
+			envVarVal: "none",
+			expectedContainerInstancePropagateTags: ContainerInstancePropagateTagsNoneType,
+		},
+	}
+
+	for _, tc := range testcases {
+		// Test the parse function only.
+		t.Run(tc.name, func(t *testing.T) {
+			defer setTestRegion()()
+			defer setTestEnv("ECS_CONTAINER_INSTANCE_PROPAGATE_TAGS", tc.envVarVal)()
+			assert.Equal(t, parseContainerInstancePropagateTags(), tc.expectedContainerInstancePropagateTags,
+				"Wrong value for ContainerInstancePropagateTags")
+		})
+
+		t.Run(tc.name, func(t *testing.T) {
+			defer setTestRegion()()
+			defer setTestEnv("ECS_CONTAINER_INSTANCE_PROPAGATE_TAGS", tc.envVarVal)()
+			cfg, err := NewConfig(ec2.NewBlackholeEC2MetadataClient())
+			assert.NoError(t, err)
+			assert.Equal(t, cfg.ContainerInstancePropagateTags, tc.expectedContainerInstancePropagateTags,
+				"Wrong value for ContainerInstancePropagateTags")
 		})
 	}
 }

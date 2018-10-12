@@ -131,6 +131,8 @@ additional details on each available environment variable.
 | `ECS_ENABLE_CPU_UNBOUNDED_WINDOWS_WORKAROUND` | `true` | When `true`, ECS will allow CPU unbounded(CPU=`0`) tasks to run along with CPU bounded tasks in Windows. | Not applicable | `false` |
 | `ECS_TASK_METADATA_RPS_LIMIT` | `100,150` | Comma separated integer values for steady state and burst throttle limits for task metadata endpoint | `40,60` | `40,60` |
 | `ECS_SHARED_VOLUME_MATCH_FULL_CONFIG` | `true` | When `true`, ECS Agent will compare name, driver options, and labels to make sure volumes are identical. When `false`, Agent will short circuit shared volume comparison if the names match. This is the default Docker behavior. If a volume is shared across instances, this should be set to `false`. | `false` | `false`|
+| `ECS_CONTAINER_INSTANCE_PROPAGATE_TAGS` | `"ec2_instance"` | If `"ec2_instance"` is specified, tags of the ec2 instance will be registered to ECS. | `"none"` | `"none"` |
+| `ECS_CONTAINER_INSTANCE_TAGS` | `{"tag_key": "tag_val"}` | Tags that will be registered to ECS, tags from `ECS_CONTAINER_INSTANCE_PROPAGATE_TAGS` will be overridden when tags with same keys are found. | `{}` | `{}` |
 
 ### Persistence
 
