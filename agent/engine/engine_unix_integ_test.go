@@ -25,7 +25,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -215,108 +214,70 @@ type nameSet map[string]bool
 
 // Holds the Events Map described above with a RW mutex
 type TestEvents struct {
-	RecordedEvents EventSet
-	lock           sync.RWMutex
-}
-
-// Go routine that monitors the statechange.Event channel and stores
-// them in the map
-func CollectTaskEngineEvents(stopCollect chan bool, stateChangeEvents <-chan statechange.Event, testEvents *TestEvents) {
-	for {
-		select {
-		// If this channel gets set, we terminate this go routine
-		case <-stopCollect:
-			break
-		default:
-			// We continuously check for new stateChangeEvents and store them in the TestEvents' RecordedEvents map
-			select {
-			case event := <-stateChangeEvents:
-				switch event.GetEventType() {
-				case statechange.TaskEvent:
-					testEvents.lock.Lock()
-					taskEvent := event.(api.TaskStateChange)
-					if _, exists := testEvents.RecordedEvents[statechange.TaskEvent]; !exists {
-						testEvents.RecordedEvents[statechange.TaskEvent] = make(statusToName)
-					}
-					if _, exists := testEvents.RecordedEvents[statechange.TaskEvent][taskEvent.Status.String()]; !exists {
-						testEvents.RecordedEvents[statechange.TaskEvent][taskEvent.Status.String()] = make(map[string]bool)
-					}
-					testEvents.RecordedEvents[statechange.TaskEvent][taskEvent.Status.String()][taskEvent.TaskARN] = true
-					testEvents.lock.Unlock()
-				case statechange.ContainerEvent:
-					testEvents.lock.Lock()
-					containerEvent := event.(api.ContainerStateChange)
-					if _, exists := testEvents.RecordedEvents[statechange.ContainerEvent]; !exists {
-						testEvents.RecordedEvents[statechange.ContainerEvent] = make(statusToName)
-					}
-					if _, exists := testEvents.RecordedEvents[statechange.ContainerEvent][containerEvent.Status.String()]; !exists {
-						testEvents.RecordedEvents[statechange.ContainerEvent][containerEvent.Status.String()] = make(map[string]bool)
-					}
-					testEvents.RecordedEvents[statechange.ContainerEvent][containerEvent.Status.String()][containerEvent.TaskArn+":"+containerEvent.ContainerName] = true
-					testEvents.lock.Unlock()
-				}
-			default:
-				continue
-			}
-		}
-	}
-}
-
-// This method queries the TestEvents struct to check a Task Status.
-// The current timeout for this Verification is 2 minutes in case the event has not yet been fired
-func VerifyTaskStatus(status apitaskstatus.TaskStatus, taskARN string, testEvents *TestEvents, t *testing.T) error {
-	var currTime time.Duration
-	currTime = 0
-	for {
-		testEvents.lock.Lock()
-		if _, found := testEvents.RecordedEvents[statechange.TaskEvent][status.String()][taskARN]; found {
-			testEvents.lock.Unlock()
-			return nil
-		}
-		testEvents.lock.Unlock()
-		currTime += 2 * time.Second
-		if currTime > time.Minute {
-			t.Errorf("Task never reached the state: ", status.String())
-			return fmt.Errorf("Task[%s] never reached %s", taskARN, status.String())
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
-
-// This method queries the TestEvents struct to check a Task Status.
-// The current timeout for this Verification is 2 minutes in case the event has not yet been fired
-func VerifyContainerStatus(status apicontainerstatus.ContainerStatus, ARNcontName string, testEvents *TestEvents, t *testing.T) error {
-	var currTime time.Duration
-	currTime = 0
-	for {
-		testEvents.lock.Lock()
-		if _, found := testEvents.RecordedEvents[statechange.ContainerEvent][status.String()][ARNcontName]; found {
-			testEvents.lock.Unlock()
-			return nil
-		}
-		testEvents.lock.Unlock()
-		currTime += 2 * time.Second
-		if currTime > time.Minute {
-			t.Errorf("Container never reached the state: ", status.String())
-			return fmt.Errorf("Container[%s] never reached %s", ARNcontName, status.String())
-		}
-		time.Sleep(2 * time.Second)
-	}
+	RecordedEvents    EventSet
+	StateChangeEvents <-chan statechange.Event
 }
 
 // Initializes the TestEvents using the TaskEngine. Abstracts the overhead required to set up
 // collecting TaskEngine stateChangeEvents.
 // We must use the Golang assert library and NOT the require library to ensure the Go routine is
 // stopped at the end of our tests
-func InitEventCollection(taskEngine TaskEngine) (chan bool, *TestEvents) {
+func InitEventCollection(taskEngine TaskEngine) *TestEvents {
 	stateChangeEvents := taskEngine.StateChangeEvents()
 	recordedEvents := make(EventSet)
 	testEvents := &TestEvents{
-		RecordedEvents: recordedEvents,
+		RecordedEvents:    recordedEvents,
+		StateChangeEvents: stateChangeEvents,
 	}
-	stopCollecting := make(chan bool)
-	go CollectTaskEngineEvents(stopCollecting, stateChangeEvents, testEvents)
-	return stopCollecting, testEvents
+	return testEvents
+}
+
+// This method queries the TestEvents struct to check a Task Status.
+// This method will block if there are no more stateChangeEvents from the DockerTaskEngine but is expected
+func VerifyTaskStatus(status apitaskstatus.TaskStatus, taskARN string, testEvents *TestEvents, t *testing.T) error {
+	for {
+		if _, found := testEvents.RecordedEvents[statechange.TaskEvent][status.String()][taskARN]; found {
+			return nil
+		}
+		event := <-testEvents.StateChangeEvents
+		RecordEvent(testEvents, event)
+	}
+}
+
+// This method queries the TestEvents struct to check a Task Status.
+// This method will block if there are no more stateChangeEvents from the DockerTaskEngine but is expected
+func VerifyContainerStatus(status apicontainerstatus.ContainerStatus, ARNcontName string, testEvents *TestEvents, t *testing.T) error {
+	for {
+		if _, found := testEvents.RecordedEvents[statechange.ContainerEvent][status.String()][ARNcontName]; found {
+			return nil
+		}
+		event := <-testEvents.StateChangeEvents
+		RecordEvent(testEvents, event)
+	}
+}
+
+// Will record the event that was just collected into the TestEvents struct's RecordedEvents map
+func RecordEvent(testEvents *TestEvents, event statechange.Event) {
+	switch event.GetEventType() {
+	case statechange.TaskEvent:
+		taskEvent := event.(api.TaskStateChange)
+		if _, exists := testEvents.RecordedEvents[statechange.TaskEvent]; !exists {
+			testEvents.RecordedEvents[statechange.TaskEvent] = make(statusToName)
+		}
+		if _, exists := testEvents.RecordedEvents[statechange.TaskEvent][taskEvent.Status.String()]; !exists {
+			testEvents.RecordedEvents[statechange.TaskEvent][taskEvent.Status.String()] = make(map[string]bool)
+		}
+		testEvents.RecordedEvents[statechange.TaskEvent][taskEvent.Status.String()][taskEvent.TaskARN] = true
+	case statechange.ContainerEvent:
+		containerEvent := event.(api.ContainerStateChange)
+		if _, exists := testEvents.RecordedEvents[statechange.ContainerEvent]; !exists {
+			testEvents.RecordedEvents[statechange.ContainerEvent] = make(statusToName)
+		}
+		if _, exists := testEvents.RecordedEvents[statechange.ContainerEvent][containerEvent.Status.String()]; !exists {
+			testEvents.RecordedEvents[statechange.ContainerEvent][containerEvent.Status.String()] = make(map[string]bool)
+		}
+		testEvents.RecordedEvents[statechange.ContainerEvent][containerEvent.Status.String()][containerEvent.TaskArn+":"+containerEvent.ContainerName] = true
+	}
 }
 
 // This Test starts an executable named pidNamespaceTest on one docker container.
@@ -329,26 +290,23 @@ func TestHostPIDNamespaceSharingInSingleTask(t *testing.T) {
 	testTask := createNamespaceSharingTask("TaskSharePIDWithTask", "host", "", testPIDNamespaceImage, theCommand)
 	go taskEngine.AddTask(testTask)
 
-	stopCollecting, testEvents := InitEventCollection(taskEngine)
-	defer func() {
-		stopCollecting <- true
-	}()
-	t.Log("Verifying Task Status")
+	testEvents := InitEventCollection(taskEngine)
+
 	err := VerifyTaskStatus(apitaskstatus.TaskRunning, testTask.Arn, testEvents, t)
-	require.NoError(t, err, "Not verified task running")
+	assert.NoError(t, err, "Not verified task running")
 	assert.Equal(t, "host", testTask.PIDMode)
 	//Wait for container1 and container2 to go down
 	err = VerifyContainerStatus(apicontainerstatus.ContainerStopped, testTask.Arn+":container1", testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	err = VerifyContainerStatus(apicontainerstatus.ContainerStopped, testTask.Arn+":container2", testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	//Manually stop container0
 	cont0, _ := testTask.ContainerByName("container0")
 	taskEngine.(*DockerTaskEngine).stopContainer(testTask, cont0)
 
 	err = VerifyTaskStatus(apitaskstatus.TaskStopped, testTask.Arn, testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	cont1, _ := testTask.ContainerByName("container1")
 	assert.Equal(t, testPIDNamespaceProcessFound, *(cont1.GetKnownExitCode()), "container1 could not see NamespaceTest process")
@@ -383,21 +341,18 @@ func TestHostPIDNamespaceSharingInMultipleTasks(t *testing.T) {
 		},
 	}
 
-	stopCollecting, testEvents := InitEventCollection(taskEngine)
-	defer func() {
-		stopCollecting <- true
-	}()
+	testEvents := InitEventCollection(taskEngine)
 
 	// Run Task with Process attached
 	go taskEngine.AddTask(testTaskWithProcess)
 	err := VerifyTaskStatus(apitaskstatus.TaskRunning, testTaskWithProcess.Arn, testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, "host", testTaskWithProcess.PIDMode)
 	// Wait for container1 and container2 to go down
 	err = VerifyContainerStatus(apicontainerstatus.ContainerStopped, testTaskWithProcess.Arn+":container1", testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	err = VerifyContainerStatus(apicontainerstatus.ContainerStopped, testTaskWithProcess.Arn+":container2", testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	cont1, _ := testTaskWithProcess.ContainerByName("container1")
 	assert.Equal(t, testPIDNamespaceProcessFound, *(cont1.GetKnownExitCode()), "container1 could not see NamespaceTest process")
 	cont2, _ := testTaskWithProcess.ContainerByName("container2")
@@ -406,13 +361,13 @@ func TestHostPIDNamespaceSharingInMultipleTasks(t *testing.T) {
 	// Run Task without Process attached
 	go taskEngine.AddTask(testTaskWithoutProcess)
 	err = VerifyTaskStatus(apitaskstatus.TaskRunning, testTaskWithoutProcess.Arn, testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, "host", testTaskWithoutProcess.PIDMode)
 	// Wait for container0 to go down
 	err = VerifyContainerStatus(apicontainerstatus.ContainerStopped, testTaskWithoutProcess.Arn+":container0", testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	err = VerifyTaskStatus(apitaskstatus.TaskStopped, testTaskWithoutProcess.Arn, testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 	cont0, _ := testTaskWithoutProcess.ContainerByName("container0")
 	assert.Equal(t, testPIDNamespaceProcessFound, *(cont0.GetKnownExitCode()), "container0 could not see NamespaceTest process, but should be able to.")
 
@@ -420,7 +375,7 @@ func TestHostPIDNamespaceSharingInMultipleTasks(t *testing.T) {
 	cont, _ := testTaskWithProcess.ContainerByName("container0")
 	taskEngine.(*DockerTaskEngine).stopContainer(testTaskWithProcess, cont)
 	err = VerifyTaskStatus(apitaskstatus.TaskStopped, testTaskWithProcess.Arn, testEvents, t)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 }
 
 // This Test starts an executable in a container in Task1 with the PID namespace within the Task.
@@ -451,10 +406,7 @@ func TestTaskPIDNamespaceSharingInMultipleTasks(t *testing.T) {
 		},
 	}
 
-	stopCollecting, testEvents := InitEventCollection(taskEngine)
-	defer func() {
-		stopCollecting <- true
-	}()
+	testEvents := InitEventCollection(taskEngine)
 
 	// Run Task with Process attached
 	go taskEngine.AddTask(testTaskWithProcess)
@@ -508,10 +460,7 @@ func TestHostIPCNamespaceSharingInSingleTask(t *testing.T) {
 	theCommand := []string{"sh", "-c", testIPCNamespaceCommand}
 	testTask := createNamespaceSharingTask("TaskShareIPCWithHost", "", "host", testIPCNamespaceImage, theCommand)
 
-	stopCollecting, testEvents := InitEventCollection(taskEngine)
-	defer func() {
-		stopCollecting <- true
-	}()
+	testEvents := InitEventCollection(taskEngine)
 
 	go taskEngine.AddTask(testTask)
 	err := VerifyTaskStatus(apitaskstatus.TaskRunning, testTask.Arn, testEvents, t)
@@ -562,10 +511,7 @@ func TestHostIPCNamespaceSharingInMultipleTasks(t *testing.T) {
 		},
 	}
 
-	stopCollecting, testEvents := InitEventCollection(taskEngine)
-	defer func() {
-		stopCollecting <- true
-	}()
+	testEvents := InitEventCollection(taskEngine)
 
 	// Run Task with IPC Semaphore attached
 	go taskEngine.AddTask(testTaskWithResource)
@@ -630,10 +576,7 @@ func TestTaskIPCNamespaceSharingInMultipleTasks(t *testing.T) {
 		},
 	}
 
-	stopCollecting, testEvents := InitEventCollection(taskEngine)
-	defer func() {
-		stopCollecting <- true
-	}()
+	testEvents := InitEventCollection(taskEngine)
 
 	// Run Task with Semaphore
 	go taskEngine.AddTask(testTaskWithResource)

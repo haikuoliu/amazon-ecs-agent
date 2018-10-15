@@ -764,6 +764,8 @@ func TestNamespaceProvisionDependencyAndHostConfig(t *testing.T) {
 				//configure HostConfig for each container
 				dockHostCfg, err := task.DockerHostConfig(container, docMaps, defaultDockerClientAPIVersion)
 				assert.Nil(t, err)
+				assert.Equal(t, task.IPCMode, dockHostCfg.IpcMode)
+				assert.Equal(t, task.PIDMode, dockHostCfg.PidMode)
 				switch aTest.IPCMode {
 				case "host":
 					assert.Equal(t, "host", dockHostCfg.IpcMode)
