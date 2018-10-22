@@ -981,7 +981,6 @@ func TestTwoTasksSharedLocalVolume(t *testing.T) {
 func TestHostPIDNamespaceSharing(t *testing.T) {
 	agent := RunAgent(t, nil)
 	defer agent.Cleanup()
-	agent.RequireVersion(">=1.20.0")
 
 	sTask, err := agent.StartTask(t, "pid-namespace-host-share")
 	require.NoError(t, err, "Register task definition failed")
@@ -1006,7 +1005,6 @@ func TestHostPIDNamespaceSharing(t *testing.T) {
 func TestTaskPIDNamespaceSharing(t *testing.T) {
 	agent := RunAgent(t, nil)
 	defer agent.Cleanup()
-	agent.RequireVersion(">=1.20.0")
 
 	sTask, err := agent.StartTask(t, "pid-namespace-task-share")
 	require.NoError(t, err, "Register task definition failed")
@@ -1031,7 +1029,6 @@ func TestTaskPIDNamespaceSharing(t *testing.T) {
 func TestHostIPCNamespaceSharing(t *testing.T) {
 	agent := RunAgent(t, nil)
 	defer agent.Cleanup()
-	agent.RequireVersion(">=1.20.0")
 
 	sTask, err := agent.StartTask(t, "ipc-namespace-host-share")
 	require.NoError(t, err, "Register task definition failed")
@@ -1056,7 +1053,6 @@ func TestHostIPCNamespaceSharing(t *testing.T) {
 func TestTaskIPCNamespaceSharing(t *testing.T) {
 	agent := RunAgent(t, nil)
 	defer agent.Cleanup()
-	agent.RequireVersion(">=1.20.0")
 
 	sTask, err := agent.StartTask(t, "ipc-namespace-task-share")
 	require.NoError(t, err, "Register task definition failed")
@@ -1073,5 +1069,4 @@ func TestTaskIPCNamespaceSharing(t *testing.T) {
 	sErr = sTask.WaitStopped(waitTaskStateChangeDuration)
 	require.NoError(t, sErr, "Error waiting for ipc-namespace-task-share task to stop")
 	assert.Equal(t, 2, rExitCode, "Container could see IPC resource, but shouldn't")
-
 }
