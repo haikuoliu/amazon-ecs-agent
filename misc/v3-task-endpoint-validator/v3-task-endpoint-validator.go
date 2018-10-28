@@ -409,6 +409,7 @@ func fieldEqual(rawMsgMap map[string]json.RawMessage, fieldName string, fieldVal
 }
 
 func main() {
+	defer seelog.Flush()
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
