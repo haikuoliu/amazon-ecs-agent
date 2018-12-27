@@ -1271,7 +1271,6 @@ func TestRunGPUTask(t *testing.T) {
 		GPUEnabled: true,
 	})
 	defer agent.Cleanup()
-	agent.RequireVersion(">=1.24.0")
 
 	testTask, err := agent.StartTask(t, "nvidia-gpu")
 	require.NoError(t, err)
