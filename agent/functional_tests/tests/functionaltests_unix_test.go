@@ -1338,6 +1338,7 @@ func TestASMSecretsARN(t *testing.T) {
 
 // Note: This functional test requires ECS GPU instance which has atleast 2 GPUs
 func TestRunGPUTask(t *testing.T) {
+	t.Error("failing the test!")
 	gpuInstances := []string{"p2", "p3", "g3"}
 	var isGPUInstance bool
 	iid, _ := ec2.NewEC2MetadataClient(nil).InstanceIdentityDocument()
